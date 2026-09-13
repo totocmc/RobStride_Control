@@ -1,6 +1,5 @@
 """
 Communication constants definitions.
-电机常量表定义
 
 This file contains the definitions of the constants used in communicating with the Robstride motors.
 """

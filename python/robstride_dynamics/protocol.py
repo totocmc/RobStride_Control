@@ -1,6 +1,5 @@
 """
 Private protocol definitions.
-私有协议定义
 
 This file contains the constants defined by the RobStride user manual.
 """
@@ -60,7 +59,6 @@ class CommunicationType:
 class ParameterType:
     """
     Parameter type definitions
-    参数 ID 定义
     """
     MECHANICAL_OFFSET       = (0x2005, np.float32,  "mechOffset")
     MEASURED_POSITION       = (0x3016, np.float32,  "mechPos")

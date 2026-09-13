@@ -1,14 +1,14 @@
 /*
- * RobStride MIT 模式位置控制 (C++ 版本)
- * 模式: Mode 0 (MIT Mode)
- * 通信: 循环调用 write_operation_frame
+ * RobStride MIT Mode Position Control (C++ Version)
+ * Mode: Mode 0 (MIT Mode)
+ * Communication: Loop calling write_operation_frame
  *
- * 编译:
+ * Compile:
  * g++ -o position_control_mit position_control_mit.cpp -lpthread -std=c++17
  *
- * 运行:
+ * Run:
  * sudo ./position_control_mit <motor_id>
- * (需要 sudo 权限来访问 CAN 硬件)
+ * (Requires sudo to access CAN hardware)
  */
 
 #include <iostream>
@@ -21,7 +21,7 @@
 #include <csignal>
 #include <cmath>
 
-// Linux SocketCAN 头文件
+// Linux SocketCAN headers
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -31,53 +31,53 @@
 #include <linux/can.h>
 #include <linux/can/raw.h>
 
-// --- 全局原子变量，用于线程间安全通信 ---
+// --- Global atomic variables for thread-safe communication ---
 std::atomic<bool> running(true);
 std::atomic<double> target_position(0.0);
-std::atomic<double> kp(100.0); // 高刚度
-std::atomic<double> kd(2.0);  // 高阻尼
+std::atomic<double> kp(100.0); // High stiffness
+std::atomic<double> kd(2.0);  // High damping
 
-// --- 电机和协议定义 ---
-const int MOTOR_ID_DEFAULT = 11; // 默认电机ID
-const char* CAN_INTERFACE = "can0";
+// --- Motor and Protocol Definitions ---
+const int MOTOR_ID_DEFAULT = 11; // Default motor ID
+const char* CAN_INTERFACE_DEFAULT = "can0";
 const int HOST_ID = 0xFF;
 
-// 通信类型
+// Communication Types
 const uint32_t COMM_OPERATION_CONTROL = 1;
 const uint32_t COMM_ENABLE = 3;
 const uint32_t COMM_WRITE_PARAMETER = 18;
 
-// 参数 ID
+// Parameter IDs
 const uint16_t PARAM_MODE = 0x7005;
 const uint16_t PARAM_VELOCITY_LIMIT = 0x7017;
-const uint16_t PARAM_TORQUE_LIMIT = 0x700B; // 注意: 根据 protocol.py 应该是 0x700B
+const uint16_t PARAM_TORQUE_LIMIT = 0x700B; // Note: according to protocol.py should be 0x700B
 
-// --- CAN 帧打包辅助函数 ---
+// --- CAN Frame Packing Helpers ---
 
-// 将 float 复制到 uint8_t 数组中 (小端)
+// Copy float to uint8_t array (little endian)
 void pack_float_le(uint8_t* buf, float val) {
     memcpy(buf, &val, sizeof(float));
 }
 
-// 将 uint16_t 复制到 uint8_t 数组中 (小端)
+// Copy uint16_t to uint8_t array (little endian)
 void pack_u16_le(uint8_t* buf, uint16_t val) {
     memcpy(buf, &val, sizeof(uint16_t));
 }
 
-// 将 uint16_t 打包为大端字节序
+// Pack uint16_t as big endian
 void pack_u16_be(uint8_t* buf, uint16_t val) {
     buf[0] = (val >> 8) & 0xFF;
     buf[1] = val & 0xFF;
 }
 
-// --- 底层 CAN 函数 ---
+// --- Low-level CAN Functions ---
 
 /**
- * @brief 发送一个 CAN 帧
+ * @brief Send a CAN frame
  */
 bool send_frame(int s, uint32_t can_id, const uint8_t* data, uint8_t dlc) {
     struct can_frame frame;
-    frame.can_id = can_id | CAN_EFF_FLAG; // 启用扩展帧 (29-bit)
+    frame.can_id = can_id | CAN_EFF_FLAG; // Enable extended frame (29-bit)
     frame.can_dlc = dlc;
     if (data) {
         memcpy(frame.data, data, dlc);
@@ -93,10 +93,10 @@ bool send_frame(int s, uint32_t can_id, const uint8_t* data, uint8_t dlc) {
 }
 
 /**
- * @brief 读取一个 CAN 帧 (带超时)
+ * @brief Read a CAN frame (with timeout)
  */
 bool read_frame(int s, struct can_frame* frame) {
-    // 设置 100ms 超时
+    // Set 100ms timeout
     struct timeval tv;
     tv.tv_sec = 0;
     tv.tv_usec = 100000; // 100ms
@@ -110,7 +110,7 @@ bool read_frame(int s, struct can_frame* frame) {
         return false;
     } else if (ret == 0) {
         // std::cerr << "read timeout" << std::endl;
-        return false; // 超时
+        return false; // Timeout
     }
 
     if (read(s, frame, sizeof(struct can_frame)) < 0) {
@@ -120,7 +120,7 @@ bool read_frame(int s, struct can_frame* frame) {
     return true;
 }
 
-// --- RobStride 协议函数 ---
+// --- RobStride Protocol Functions ---
 
 bool enable_motor(int s, int motor_id) {
     uint32_t ext_id = (COMM_ENABLE << 24) | (HOST_ID << 8) | motor_id;
@@ -144,15 +144,15 @@ bool write_limit(int s, int motor_id, uint16_t param_id, float limit) {
 }
 
 bool write_operation_frame(int s, int motor_id, double pos, double kp_val, double kd_val) {
-    // 1. 打包数据 (大端序!)
-    // 这些 scaling value 应该从 table.py 导入，这里为了简化硬编码
+    // 1. Pack data (big endian!)
+    // These scaling values should be imported from table.py, hardcoded here for simplicity
     const double POS_SCALE = 4 * M_PI; // rs-03
     const double VEL_SCALE = 50.0;     // rs-03
     const double KP_SCALE = 5000.0;    // rs-03
     const double KD_SCALE = 100.0;     // rs-03
     const double TQ_SCALE = 60.0;      // rs-03
 
-    // 裁剪和转换
+    // Clamp and convert
     double pos_clamped = std::max(-POS_SCALE, std::min(POS_SCALE, pos));
     double kp_clamped = std::max(0.0, std::min(KP_SCALE, kp_val));
     double kd_clamped = std::max(0.0, std::min(KD_SCALE, kd_val));
@@ -169,10 +169,10 @@ bool write_operation_frame(int s, int motor_id, double pos, double kp_val, doubl
     pack_u16_be(&data[4], kp_u16);
     pack_u16_be(&data[6], kd_u16);
     
-    // 2. 构建 CAN ID
+    // 2. Build CAN ID
     uint32_t ext_id = (COMM_OPERATION_CONTROL << 24) | (torque_u16 << 8) | motor_id;
     
-    // 3. 发送
+    // 3. Send
     return send_frame(s, ext_id, data, 8);
 }
 
@@ -182,7 +182,7 @@ bool read_operation_frame(int s) {
         if (!frame.can_id & CAN_EFF_FLAG) return false;
         
         uint32_t comm_type = (frame.can_id >> 24) & 0x1F;
-        if (comm_type == 2) { // 状态包
+        if (comm_type == 2) { // Status packet
             return true;
         }
     }
@@ -190,31 +190,31 @@ bool read_operation_frame(int s) {
 }
 
 /**
- * @brief 控制循环线程
+ * @brief Control loop thread
  */
 void control_loop(int s, int motor_id) {
-    std::cout << "🔄 控制循环已启动 (Mode 0 @ 50Hz)" << std::endl;
+    std::cout << "🔄 Control loop started (Mode 0 @ 50Hz)" << std::endl;
     
     while (running) {
         auto start = std::chrono::steady_clock::now();
         
-        // 1. 发送 MIT 帧 (只发)
+        // 1. Send MIT frame (send only)
         write_operation_frame(s, motor_id, target_position.load(), kp.load(), kd.load());
         
-        // 2. 读取状态帧 (只收)，清空缓冲区
-        while(read_operation_frame(s)); // 循环读取，直到缓冲区为空或超时
+        // 2. Read status frame (receive only), clear buffer
+        while(read_operation_frame(s)); // Loop read until buffer empty or timeout
         
         auto end = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         
-        // 固定的 50Hz 循环
+        // Fixed 50Hz loop
         std::this_thread::sleep_for(std::chrono::microseconds(20000) - elapsed);
     }
-    std::cout << "⏹️ 控制线程停止" << std::endl;
+    std::cout << "⏹️ Control thread stopped" << std::endl;
 }
 
 /**
- * @brief 初始化 SocketCAN
+ * @brief Initialize SocketCAN
  */
 int init_can(const char* ifname) {
     int s;
@@ -246,55 +246,79 @@ int init_can(const char* ifname) {
 }
 
 void signal_handler(int signum) {
-    std::cout << "\n🛑 捕获到退出信号..." << std::endl;
+    std::cout << "\n🛑 Caught exit signal..." << std::endl;
     running = false;
 }
 
 int main(int argc, char* argv[]) {
     int motor_id = MOTOR_ID_DEFAULT;
+    std::string can_interface = CAN_INTERFACE_DEFAULT;
+    
     if (argc > 1) {
         motor_id = std::atoi(argv[1]);
     }
+    if (argc > 2) {
+        can_interface = argv[2];
+    }
+    // Also check environment variable
+    const char* env_can = std::getenv("CAN_INTERFACE");
+    if (env_can) {
+        can_interface = env_can;
+    }
     
-    std::cout << "🎯 MIT 位置控制台 (ID: " << motor_id << ")" << std::endl;
+    std::cout << "🎯 MIT Position Console (ID: " << motor_id << ")" << std::endl;
+    std::cout << "Using CAN interface: " << can_interface << std::endl;
+    
+    // Check if using SLCAN device (serial)
+    if (can_interface.rfind("/dev/tty", 0) == 0 || can_interface.rfind("slcan", 0) == 0) {
+        std::cerr << "❌ SLCAN serial device detected: " << can_interface << std::endl;
+        std::cerr << "Please run slcand first to create a CAN interface:" << std::endl;
+        std::cerr << "  sudo slcand -o -s8 -S 1000000 " << can_interface << " can0" << std::endl;
+        std::cerr << "  sudo ip link set up can0" << std::endl;
+        std::cerr << "Then use 'can0' as the interface." << std::endl;
+        return 1;
+    }
     
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    int s = init_can(CAN_INTERFACE);
+    int s = init_can(can_interface.c_str());
     if (s < 0) {
-        std::cerr << "❌ 无法打开 CAN 接口 " << CAN_INTERFACE << std::endl;
+        std::cerr << "❌ Failed to open CAN interface " << can_interface << std::endl;
+        std::cerr << "Make sure the interface exists and is up:" << std::endl;
+        std::cerr << "  sudo ip link set " << can_interface << " type can bitrate 1000000" << std::endl;
+        std::cerr << "  sudo ip link set up " << can_interface << std::endl;
         return 1;
     }
-    std::cout << "📡 CAN 总线 " << CAN_INTERFACE << " 连接成功" << std::endl;
+    std::cout << "📡 CAN bus " << can_interface << " connected successfully" << std::endl;
 
-    // --- 初始化电机 ---
-    std::cout << "⚡ 激活电机 ID: " << motor_id << " ..." << std::endl;
+    // --- Initialize Motor ---
+    std::cout << "⚡ Enabling motor ID: " << motor_id << " ..." << std::endl;
     enable_motor(s, motor_id);
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     
-    std::cout << "⚙️ 切换到 MIT 模式 (Mode 0)..." << std::endl;
+    std::cout << "⚙️ Switching to MIT mode (Mode 0)..." << std::endl;
     set_mode_raw(s, motor_id, 0);
     
-    std::cout << "⚙️ 设置内部限制..." << std::endl;
+    std::cout << "⚙️ Setting internal limits..." << std::endl;
     write_limit(s, motor_id, PARAM_VELOCITY_LIMIT, 20.0);
     write_limit(s, motor_id, PARAM_TORQUE_LIMIT, 20.0);
     
-    std::cout << "🏠 设置初始目标为 0.0 ..." << std::endl;
+    std::cout << "🏠 Setting initial target to 0.0 ..." << std::endl;
     write_operation_frame(s, motor_id, 0.0, kp.load(), kd.load());
-    std::cout << "✅ 初始化完成！" << std::endl;
+    std::cout << "✅ Initialization complete!" << std::endl;
 
-    // 启动控制线程
+    // Start control thread
     std::thread t(control_loop, s, motor_id);
 
-    // --- 交互式主循环 ---
+    // --- Interactive Main Loop ---
     std::cout << "\n" << "========================================" << std::endl;
-    std::cout << "👉 输入数字 (度) 回车即可改变位置" << std::endl;
-    std::cout << "👉 'kp <值>' (例如: kp 100) 来调节刚度" << std::endl;
-    std::cout << "👉 'kd <值>' (例如: kd 2.0) 来调节阻尼 (防抖)" << std::endl;
-    std::cout << "👉 '0' 或 'home' 回到零点" << std::endl;
-    std::cout << "👉 'q' 退出" << std::endl;
-    std::cout << "⚠️  当前 Kp=" << kp.load() << " | Kd=" << kd.load() << std::endl;
+    std::cout << "👉 Enter a number (degrees) and press Enter to change position" << std::endl;
+    std::cout << "👉 'kp <value>' (e.g.: kp 100) to adjust stiffness" << std::endl;
+    std::cout << "👉 'kd <value>' (e.g.: kd 2.0) to adjust damping (anti-oscillation)" << std::endl;
+    std::cout << "👉 '0' or 'home' to return to zero" << std::endl;
+    std::cout << "👉 'q' to quit" << std::endl;
+    std::cout << "⚠️  Current Kp=" << kp.load() << " | Kd=" << kd.load() << std::endl;
     std::cout << "----------------------------------------" << std::endl;
 
     std::string line;
@@ -311,47 +335,47 @@ int main(int argc, char* argv[]) {
             running = false;
         } else if (line == "0" || line == "home") {
             target_position = 0.0;
-            std::cout << " -> 目标设定: 0.0°" << std::endl;
+            std::cout << " -> Target set: 0.0°" << std::endl;
         } else if (line.rfind("kp ", 0) == 0) {
             try {
                 kp = std::stod(line.substr(3));
-                std::cout << " -> 刚度(Kp)设定: " << kp.load() << std::endl;
+                std::cout << " -> Stiffness(Kp) set: " << kp.load() << std::endl;
             } catch (...) {
-                std::cout << "❌ 无效 Kp. 示例: kp 100.0" << std::endl;
+                std::cout << "❌ Invalid Kp. Example: kp 100.0" << std::endl;
             }
         } else if (line.rfind("kd ", 0) == 0) {
             try {
                 kd = std::stod(line.substr(3));
-                std::cout << " -> 阻尼(Kd)设定: " << kd.load() << std::endl;
+                std::cout << " -> Damping(Kd) set: " << kd.load() << std::endl;
             } catch (...) {
-                std::cout << "❌ 无效 Kd. 示例: kd 2.0" << std::endl;
+                std::cout << "❌ Invalid Kd. Example: kd 2.0" << std::endl;
             }
         } else {
             try {
                 double angle_deg = std::stod(line);
                 angle_deg = std::max(-720.0, std::min(720.0, angle_deg));
                 target_position = angle_deg * M_PI / 180.0;
-                std::cout << " -> 目标设定: " << angle_deg << "°" << std::endl;
+                std::cout << " -> Target set: " << angle_deg << "°" << std::endl;
             } catch (...) {
-                std::cout << "❌ 无效输入" << std::endl;
+                std::cout << "❌ Invalid input" << std::endl;
             }
         }
     }
 
-    // 清理
+    // Cleanup
     running = false;
     t.join();
     
-    std::cout << "🏠 回到零位..." << std::endl;
+    std::cout << "🏠 Returning to zero..." << std::endl;
     write_operation_frame(s, motor_id, 0.0, kp.load(), kd.load());
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     
-    std::cout << "🚫 禁用电机..." << std::endl;
-    // C++ SDK 中没有 disable, 我们手动发送一个 kp=0, kd=0 的帧
+    std::cout << "🚫 Disabling motor..." << std::endl;
+    // C++ SDK doesn't have disable, we manually send a frame with kp=0, kd=0
     write_operation_frame(s, motor_id, 0.0, 0.0, 0.0);
     
     close(s);
-    std::cout << "👋 程序结束" << std::endl;
+    std::cout << "👋 Program ended" << std::endl;
     
     return 0;
 }

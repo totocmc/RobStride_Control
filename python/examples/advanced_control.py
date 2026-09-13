@@ -58,9 +58,10 @@ class TrajectoryPlanner:
 class AdvancedController:
     """Advanced motor controller with trajectory planning"""
 
-    def __init__(self, motor_id: int):
+    def __init__(self, motor_id: int, can_interface: str = 'can0'):
         self.motor_id = motor_id
-        self.controller = PositionControllerMIT(motor_id)
+        self.can_interface = can_interface
+        self.controller = PositionControllerMIT(motor_id, channel=can_interface)
         self.planner = TrajectoryPlanner()
 
     def connect(self) -> bool:
@@ -151,10 +152,56 @@ def main():
         except ValueError:
             print("❌ Invalid motor ID. Using default (11)")
 
+    # Get CAN interface from command line or environment
+    can_interface = 'can0'
+    if len(sys.argv) > 2:
+        can_interface = sys.argv[2]
+    else:
+        can_interface = os.environ.get('CAN_INTERFACE', 'can0')
+
     print(f"Using Motor ID: {motor_id}")
+    print(f"Using CAN interface: {can_interface}")
+
+    # Check and setup CAN interface
+    # Handle SLCAN USB devices (like CH340)
+    if can_interface.startswith('/dev/tty') or can_interface.startswith('slcan'):
+        print(f"🔌 Detected SLCAN/serial device: {can_interface}")
+        print(f"   Make sure slcand is running:")
+        print(f"   sudo slcand -o -s8 -S 1000000 {can_interface} can0")
+        print(f"   sudo ip link set up can0")
+        print(f"   Then use 'can0' as CAN_INTERFACE")
+        return 1
+    
+    if not os.path.exists(f'/sys/class/net/{can_interface}'):
+        print(f"❌ Error: {can_interface} interface not found")
+        print(f"For native CAN (can0):")
+        print(f"  sudo ip link set {can_interface} type can bitrate 1000000")
+        print(f"  sudo ip link set up {can_interface}")
+        print(f"For SLCAN USB (CH340, etc.):")
+        print(f"  sudo slcand -o -s8 -S 1000000 /dev/ttyUSB0 can0")
+        print(f"  sudo ip link set up can0")
+        print(f"\nOr set CAN_INTERFACE environment variable:")
+        print(f"  export CAN_INTERFACE=can0")
+        return 1
+    
+    # Check if interface is UP
+    import subprocess
+    try:
+        result = subprocess.run(['ip', 'link', 'show', can_interface], 
+                              capture_output=True, text=True)
+        if 'UP' not in result.stdout:
+            print(f"⚠️ Warning: {can_interface} is not UP")
+            print(f"Attempting to bring up {can_interface}...")
+            subprocess.run(['sudo', 'ip', 'link', 'set', 'up', can_interface], 
+                         capture_output=True)
+            print(f"  Run manually if failed: sudo ip link set up {can_interface}")
+    except Exception:
+        pass
+    
+    print(f"📡 Using CAN interface: {can_interface}")
 
     # Initialize controller
-    controller = AdvancedController(motor_id)
+    controller = AdvancedController(motor_id, can_interface)
 
     try:
         # Connect to motor

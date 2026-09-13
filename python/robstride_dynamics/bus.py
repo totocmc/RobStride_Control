@@ -1,6 +1,5 @@
 """
 Bus definitions.
-电机总线定义
 
 This file contains the definitions of the RobstrideBus class, which wraps around the socket-can interface.
 """
@@ -217,10 +216,10 @@ class RobstrideBus:
         """
         Transmit data to the motor.
         Args:
-            communication_type (int): Type of communication (通信类型).
-            extra_data (int): Secondary data field (数据区 2).
-            device_id (int): ID of the target actuator (目标地址).
-            data (bytes): Primary data field (数据区 1).
+            communication_type (int): Type of communication.
+            extra_data (int): Secondary data field (data field 2).
+            device_id (int): ID of the target actuator (target address).
+            data (bytes): Primary data field (data field 1).
         """
 
         assert (communication_type >= 0) and (communication_type <= 0x1F), "Communication type out of range"
